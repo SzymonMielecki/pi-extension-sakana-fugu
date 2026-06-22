@@ -1,4 +1,3 @@
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const PROVIDER_ID = "sakana";
@@ -38,18 +37,7 @@ Never force-kill processes by raw PID against arbitrary or unknown PID lists (e.
 const fuguOverflowPattern =
 	/(context(?:_|\s|-)?(?:length|window|limit)|prompt\s+(?:is\s+)?too\s+long|input\s+(?:is\s+)?too\s+large|input\s+.*exceed.*context|maximum\s+context)/i;
 
-async function loginWithSakanaApiKey(
-	callbacks: OAuthLoginCallbacks,
-	baseUrl: string,
-): Promise<OAuthCredentials> {
-	callbacks.onAuth({ url: "https://console.sakana.ai/api-keys" });
-
-	const apiKey = (await callbacks.onPrompt({
-		message: "Paste your Sakana API key (from https://console.sakana.ai/api-keys):",
-	})).trim();
-
-	if (!apiKey) throw new Error("No Sakana API key provided");
-
+async function validateSakanaApiKey(apiKey: string, baseUrl: string): Promise<void> {
 	const response = await fetch(`${baseUrl}/models`, {
 		headers: { Authorization: `Bearer ${apiKey}` },
 	});
@@ -58,22 +46,6 @@ async function loginWithSakanaApiKey(
 		const errorText = await response.text().catch(() => "");
 		throw new Error(`Sakana API key validation failed: ${response.status} ${errorText}`.trim());
 	}
-
-	return {
-		refresh: apiKey,
-		access: apiKey,
-		// API keys do not expire through an OAuth refresh flow. Use a long-lived
-		// expiry and keep refreshToken idempotent below.
-		expires: Date.now() + 3650 * 24 * 60 * 60 * 1000,
-	};
-}
-
-async function refreshSakanaApiKey(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-	return {
-		...credentials,
-		access: credentials.access || credentials.refresh,
-		expires: Date.now() + 3650 * 24 * 60 * 60 * 1000,
-	};
 }
 
 export default function sakanaFuguConnector(pi: ExtensionAPI) {
@@ -84,12 +56,6 @@ export default function sakanaFuguConnector(pi: ExtensionAPI) {
 		baseUrl,
 		apiKey: preferredApiKeyReference(),
 		api: "openai-responses",
-		oauth: {
-			name: "Sakana Fugu (API key)",
-			login: (callbacks) => loginWithSakanaApiKey(callbacks, baseUrl),
-			refreshToken: refreshSakanaApiKey,
-			getApiKey: (credentials) => credentials.access,
-		},
 		models: [
 			{
 				id: "fugu",
@@ -128,6 +94,39 @@ export default function sakanaFuguConnector(pi: ExtensionAPI) {
 				maxTokens: 128_000,
 			},
 		],
+	});
+
+	pi.on("input", async (event, ctx) => {
+		const text = event.text.trim().toLowerCase();
+		if (text !== "/login sakana" && text !== "/login fugu") {
+			return { action: "continue" };
+		}
+
+		if (!ctx.hasUI) {
+			return { action: "handled" };
+		}
+
+		const apiKey = (await ctx.ui.input(
+			"Sakana API key:",
+			"Create one at https://console.sakana.ai/api-keys",
+		))?.trim();
+
+		if (!apiKey) {
+			ctx.ui.notify("Sakana login cancelled: no API key provided.", "warning");
+			return { action: "handled" };
+		}
+
+		try {
+			await validateSakanaApiKey(apiKey, baseUrl);
+			(ctx.modelRegistry as any).authStorage.set(PROVIDER_ID, { type: "api_key", key: apiKey });
+			ctx.modelRegistry.refresh();
+			ctx.ui.notify("Saved Sakana API key. Use /model to select sakana/fugu.", "info");
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			ctx.ui.notify(`Sakana login failed: ${message}`, "error");
+		}
+
+		return { action: "handled" };
 	});
 
 	// Sakana ships these base agent-conduct safeguards with its Codex catalog.

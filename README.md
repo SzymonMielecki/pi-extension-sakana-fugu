@@ -12,13 +12,21 @@ Restart pi or run `/reload` after installing.
 
 ## Authenticate
 
-Preferred: use pi's login flow:
+Fast path:
 
 ```text
 /login sakana
 ```
 
-The connector opens the Sakana API keys page, prompts for your key, validates it with `/v1/models`, then stores it in pi's auth store.
+The connector prompts for your Sakana API key, validates it with `/v1/models`, then stores it in pi's auth store.
+
+Built-in pi flow also works:
+
+```text
+/login
+```
+
+Choose **Use an API key**, then select **Sakana Fugu**.
 
 Environment variables also work:
 
